@@ -3,6 +3,7 @@ name: Release build
 on:
   push:
     branches:
+      - measure
       - release/**
 
 jobs:

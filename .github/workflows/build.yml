@@ -43,8 +43,6 @@ jobs:
           mv target/release/symbolicli build/symbolicli-Linux-x86_64
 
       - uses: actions/upload-artifact@v4
-        # don't upload any artifacts
-        if: false
         with:
           name: artifact-linux-${{ github.sha }}
           path: build/*
@@ -106,8 +104,6 @@ jobs:
           zip -r ../../../build/symbolicator-aarch64-apple-darwin-debug.zip symbolicator.dSYM
 
       - uses: actions/upload-artifact@v4
-        # don't upload any artifacts
-        if: false
         with:
           name: artifact-mac-${{ github.sha }}
           path: build/*
@@ -139,8 +135,6 @@ jobs:
           mv wasm-split.exe wasm-split-Windows-x86_64.exe
 
       - uses: actions/upload-artifact@v4
-        # don't upload any artifacts
-        if: false
         with:
           name: artifact-windows-${{ github.sha }}
           path: target/release/*-Windows-x86_64.exe

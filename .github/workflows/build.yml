@@ -3,7 +3,6 @@ name: Release build
 on:
   push:
     branches:
-      - measure
       - release/**
 
 jobs:
@@ -42,6 +41,9 @@ jobs:
           mv target/release/symsorter build/symsorter-Linux-x86_64
           mv target/release/symbolicli build/symbolicli-Linux-x86_64
 
+      - uses: actions/upload-artifact@v4
+        # don't upload any artifacts
+        if: false
         with:
           name: artifact-linux-${{ github.sha }}
           path: build/*

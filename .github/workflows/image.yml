@@ -12,6 +12,8 @@ concurrency:
 
 jobs:
   build-image:
+    permissions:
+      actions: write
     strategy:
       matrix:
         arch: [amd64]

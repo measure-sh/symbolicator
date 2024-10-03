@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - master
+      - measure
       - release/**
 
 concurrency:
@@ -40,6 +40,8 @@ jobs:
         run: cargo clippy --all-features --workspace --tests --examples
 
   test:
+    # don't run tests as it needs Sentry specific configurations
+    if: false
     name: Tests
     runs-on: ubuntu-latest
     steps:
@@ -67,6 +69,8 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
 
   test_against_latest_sentry:
+    # don't run Sentry specific jobs
+    if: false
     name: Sentry-Symbolicator Tests
     runs-on: ubuntu-latest
 
@@ -160,6 +164,8 @@ jobs:
         run: mkdocs build
 
   codecov:
+    # don't run code coverage as it needs Sentry specific configuration
+    if: false
     name: Code Coverage
     runs-on: ubuntu-latest
     continue-on-error: true # well, its nightly and highly experimental

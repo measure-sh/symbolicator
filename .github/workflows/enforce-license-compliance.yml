@@ -8,6 +8,8 @@ on:
 
 jobs:
   enforce-license-compliance:
+    # don't run license compliance
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: 'Enforce License Compliance'

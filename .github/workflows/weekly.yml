@@ -10,6 +10,8 @@ env:
 
 jobs:
   weekly-ci:
+    # don't run weekly jobs
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +39,8 @@ jobs:
       - run: cargo test --workspace --all-features
 
   weekly-audit:
+    # don't run weekly jobs
+    if: false
     name: Audit
     runs-on: ubuntu-latest
 

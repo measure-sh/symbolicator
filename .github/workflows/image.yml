@@ -3,7 +3,7 @@ on:
   pull_request:
   push:
     branches:
-      - master
+      - measure
       - release/**
 
 concurrency:
@@ -12,6 +12,8 @@ concurrency:
 
 jobs:
   build-image:
+    # disable job temporarily
+    if: false
     strategy:
       matrix:
         arch: [amd64]

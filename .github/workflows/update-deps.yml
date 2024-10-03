@@ -9,6 +9,8 @@ on:
 
 jobs:
   native:
+    # don't update dependencies
+    if: false
     uses: getsentry/github-workflows/.github/workflows/updater.yml@v2
     with:
       path: crates/symbolicator-crash/sentry-native

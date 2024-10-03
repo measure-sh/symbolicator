@@ -1,3 +1,9 @@
+> [!NOTE]
+>
+> This is a forked and modified version of [getsentry/symbolicator](https://github.com/getsentry/symbolicator).
+>
+> The `master` branch remains unmodified and should merge from upstream. All modifications must be done in the `measure` branch. [Know more](./mod.md).
+
 <p align="center">
     <img src="artwork/logo.png" width="520">
     <br />

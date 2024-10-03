@@ -13,7 +13,7 @@ concurrency:
 jobs:
   build-image:
     permissions:
-      actions: write
+      packages: write
     strategy:
       matrix:
         arch: [amd64]

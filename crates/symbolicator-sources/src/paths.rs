@@ -387,7 +387,9 @@ fn get_search_target_id(filetype: FileType, identifier: &ObjectId) -> Option<Cow
         FileType::ElfCode | FileType::ElfDebug => {
             Some(Cow::Borrowed(identifier.code_id.as_ref()?.as_str()))
         }
-        FileType::Proguard => None,
+        FileType::Proguard => Some(Cow::Owned(
+            identifier.debug_id?.uuid().as_simple().to_string(),
+        )),
     }
 }
 

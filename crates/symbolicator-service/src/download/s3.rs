@@ -7,6 +7,7 @@ use std::time::Duration;
 use aws_config::ecs::EcsCredentialsProvider;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_credential_types::Credentials;
+use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::Client;
@@ -55,8 +56,12 @@ impl S3Downloader {
             );
             Arc::new(match key.aws_credentials_provider {
                 AwsCredentialsProvider::Container => {
-                    self.create_s3_client(EcsCredentialsProvider::builder().build(), &key.region)
-                        .await
+                    self.create_s3_client(
+                        EcsCredentialsProvider::builder().build(),
+                        &key.region,
+                        &key.path_style,
+                    )
+                    .await
                 }
                 AwsCredentialsProvider::Static => {
                     self.create_s3_client(
@@ -66,6 +71,7 @@ impl S3Downloader {
                             None,
                         ),
                         &key.region,
+                        &key.path_style,
                     )
                     .await
                 }
@@ -83,6 +89,7 @@ impl S3Downloader {
         &self,
         provider: impl ProvideCredentials + 'static,
         region: &S3Region,
+        path_style: &bool,
     ) -> Client {
         let mut config_loader = aws_config::from_env()
             .credentials_provider(provider)
@@ -92,8 +99,18 @@ impl S3Downloader {
             config_loader = config_loader.endpoint_url(endpoint_url);
         };
 
-        let config = config_loader.load().await;
-        Client::new(&config)
+        let sdkconfig = config_loader.load().await;
+
+        // Force path style
+        if path_style.clone() {
+            let config = S3ConfigBuilder::from(&sdkconfig)
+                .force_path_style(true)
+                .build();
+
+            Client::from_conf(config)
+        } else {
+            Client::new(&sdkconfig)
+        }
     }
 
     /// Downloads a source hosted on an S3 bucket.
@@ -229,6 +246,7 @@ mod tests {
         } else {
             Some(S3SourceKey {
                 region: S3Region::from("us-east-1"),
+                path_style: false,
                 aws_credentials_provider: AwsCredentialsProvider::Static,
                 access_key,
                 secret_key,
@@ -412,6 +430,7 @@ mod tests {
 
         let broken_key = S3SourceKey {
             region: S3Region::from("us-east-1"),
+            path_style: false,
             aws_credentials_provider: AwsCredentialsProvider::Static,
             access_key: "".into(),
             secret_key: "".into(),
@@ -440,6 +459,7 @@ mod tests {
     fn test_s3_remote_dif_uri() {
         let source_key = Arc::new(S3SourceKey {
             region: S3Region::from("us-east-1"),
+            path_style: false,
             aws_credentials_provider: AwsCredentialsProvider::Static,
             access_key: String::from("abc"),
             secret_key: String::from("123"),

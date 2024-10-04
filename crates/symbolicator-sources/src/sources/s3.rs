@@ -153,6 +153,10 @@ pub struct S3SourceKey {
     )]
     pub region: S3Region,
 
+    /// Turn on S3 path style requests
+    #[serde(default)]
+    pub path_style: bool,
+
     /// AWS IAM credentials provider for obtaining S3 access.
     #[serde(default)]
     pub aws_credentials_provider: AwsCredentialsProvider,

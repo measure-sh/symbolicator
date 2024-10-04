@@ -38,6 +38,7 @@ Example configuration:
     "type": "s3",
     "bucket": "my-project-my-bucket",
     "region": "us-east-1",
+    "path_style": false,
     "prefix": "/linux",
     "access_key": "AMVSAVWEXRIRJPOMCKWN",
     "secret_key": "Lqnc45YWr9y7qftCI+vST/1ZPmmw1H6SkbIf2v/8",
@@ -54,6 +55,7 @@ Example configuration:
     "type": "s3",
     "bucket": "my-project-my-bucket",
     "region": "us-east-1",
+    "path_style": false,
     "prefix": "/windows",
     "access_key": "AMVSAVWEXRIRJPOMCKWN",
     "secret_key": "Lqnc45YWr9y7qftCI+vST/1ZPmmw1H6SkbIf2v/8",
@@ -138,6 +140,8 @@ issues as the SSQP protocol demands case insensitive lookups.
   supplied as strings, i.e. "us-east-1". In order to use a custom region for an
   S3 compatible service such as Ceph or minio, specify a tuple:
   `["custom-region-name", "http://minio-address/"]`.
+- `path_style`: force S3 path style requests. If true, will use path style
+  requests, otherwise will use virtual hosted style requests. Defaults to false.
 - `access_key`: the AWS access key to use
 - `secret_key`: the AWS secret key to use
 

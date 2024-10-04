@@ -102,7 +102,7 @@ impl S3Downloader {
         let sdkconfig = config_loader.load().await;
 
         // Force path style
-        if path_style.clone() {
+        if *path_style {
             let config = S3ConfigBuilder::from(&sdkconfig)
                 .force_path_style(true)
                 .build();

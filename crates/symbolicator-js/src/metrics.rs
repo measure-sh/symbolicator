@@ -26,8 +26,10 @@
 //! - `js.scraped_files`: The number of files that were scraped from the Web.
 //!   Should be `0`, as we should find/use files from within bundles or as individual artifacts.
 
+use std::collections::HashMap;
+
 use symbolic::debuginfo::sourcebundle::SourceFileType;
-use symbolicator_service::metrics;
+use symbolicator_service::{metric, metrics, types::Platform};
 
 use crate::interface::ResolvedWith;
 
@@ -218,4 +220,42 @@ impl JsMetrics {
             &[("method", "release-old")],
         );
     }
+}
+
+/// Record metrics about stacktraces and frames.
+pub fn record_stacktrace_metrics(event_platform: Option<Platform>, stats: SymbolicationStats) {
+    let event_platform = event_platform
+        .as_ref()
+        .map(|p| p.as_ref())
+        .unwrap_or("none");
+
+    metric!(time_raw("symbolication.num_stacktraces") = stats.num_stacktraces);
+
+    for (p, count) in stats.symbolicated_frames {
+        let frame_platform = p.as_ref().map(|p| p.as_ref()).unwrap_or("none");
+        metric!(
+            time_raw("symbolication.num_frames") =
+                count,
+            "frame_platform" => frame_platform, "event_platform" => event_platform
+        );
+    }
+
+    for (p, count) in stats.unsymbolicated_frames {
+        let frame_platform = p.as_ref().map(|p| p.as_ref()).unwrap_or("none");
+        metric!(
+            time_raw("symbolication.unsymbolicated_frames") =
+                count,
+            "frame_platform" => frame_platform, "event_platform" => event_platform
+        );
+    }
+
+    metric!(time_raw("js.missing_sourcescontent") = stats.missing_sourcescontent);
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SymbolicationStats {
+    pub(crate) symbolicated_frames: HashMap<Option<Platform>, u64>,
+    pub(crate) unsymbolicated_frames: HashMap<Option<Platform>, u64>,
+    pub(crate) num_stacktraces: u64,
+    pub(crate) missing_sourcescontent: u64,
 }

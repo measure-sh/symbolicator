@@ -31,14 +31,14 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use symbolic::common::{ByteView, DebugId, SelfCell};
-use symbolic::debuginfo::js::discover_sourcemaps_location;
+use symbolic::debuginfo::js::{discover_debug_id, discover_sourcemaps_location};
 use symbolic::debuginfo::sourcebundle::{
     SourceBundleDebugSession, SourceFileDescriptor, SourceFileType,
 };
 use symbolic::debuginfo::Object;
 use symbolic::sourcemapcache::SourceMapCache;
 use symbolicator_sources::{
-    HttpRemoteFile, ObjectType, RemoteFile, RemoteFileUri, SentryFileId, SentrySourceConfig,
+    HttpRemoteFile, RemoteFile, RemoteFileUri, SentryFileId, SentrySourceConfig,
 };
 
 use symbolicator_service::caches::{ByteViewString, SourceFilesCache};
@@ -149,26 +149,10 @@ impl SourceMapLookup {
 
         let mut modules_by_abs_path = HashMap::with_capacity(modules.len());
         for module in modules {
-            if module.ty != ObjectType::SourceMap {
-                // TODO(sourcemap): raise an error?
-                continue;
-            }
-            let Some(code_file) = module.code_file.as_ref() else {
-                // TODO(sourcemap): raise an error?
-                continue;
-            };
+            let debug_id = module.debug_id.parse().ok();
+            let cached_module = SourceMapModule::new(&module.code_file, debug_id);
 
-            let debug_id = match &module.debug_id {
-                Some(id) => {
-                    // TODO(sourcemap): raise an error?
-                    id.parse().ok()
-                }
-                None => None,
-            };
-
-            let cached_module = SourceMapModule::new(code_file, debug_id);
-
-            modules_by_abs_path.insert(code_file.to_owned(), cached_module);
+            modules_by_abs_path.insert(module.code_file.to_owned(), cached_module);
         }
 
         let fetcher = ArtifactFetcher {
@@ -447,6 +431,7 @@ impl<T> CachedFileEntry<T> {
 pub struct CachedFile {
     pub contents: Option<ByteViewString>,
     sourcemap_url: Option<Arc<SourceMapUrl>>,
+    debug_id: Option<DebugId>,
 }
 
 impl fmt::Debug for CachedFile {
@@ -493,6 +478,7 @@ impl CachedFile {
         Ok(Self {
             contents,
             sourcemap_url: sourcemap_url.map(Arc::new),
+            debug_id: None,
         })
     }
 
@@ -580,11 +566,16 @@ impl ArtifactFetcher {
             self.metrics.record_not_found(SourceFileType::Source);
         }
 
-        // Then fetch the corresponding sourcemap if we have a sourcemap reference
-        let sourcemap_url = match &minified_source.entry {
-            Ok(minified_source) => minified_source.sourcemap_url.as_deref(),
-            Err(_) => None,
+        // Then fetch the corresponding sourcemap reference and debug_id
+        let (sourcemap_url, source_debug_id) = match &minified_source.entry {
+            Ok(minified_source) => (
+                minified_source.sourcemap_url.as_deref(),
+                minified_source.debug_id,
+            ),
+            Err(_) => (None, None),
         };
+
+        let debug_id = debug_id.or(source_debug_id);
 
         // If we don't have sourcemap reference, nor a `DebugId`, we skip creating `SourceMapCache`.
         if sourcemap_url.is_none() && debug_id.is_none() {
@@ -600,6 +591,7 @@ impl ArtifactFetcher {
                 entry: Ok(CachedFile {
                     contents: Some(data.clone()),
                     sourcemap_url: None,
+                    debug_id,
                 }),
                 resolved_with: minified_source.resolved_with,
             },
@@ -675,6 +667,7 @@ impl ArtifactFetcher {
     }
 
     /// Attempt to scrape a file from the web.
+    #[tracing::instrument(skip(self))]
     async fn scrape(&mut self, key: &FileKey) -> CachedFileEntry {
         let Some(abs_path) = key.abs_path() else {
             return CachedFileEntry::empty();
@@ -781,12 +774,15 @@ impl ArtifactFetcher {
                     .and_then(|sm_ref| SourceMapUrl::parse_with_prefix(abs_path, sm_ref).ok())
                     .map(Arc::new);
 
+                let debug_id = discover_debug_id(&contents);
+
                 self.scraping_attempts
                     .push(JsScrapingAttempt::success(abs_path.to_owned()));
 
                 Ok(CachedFile {
                     contents: Some(contents),
                     sourcemap_url,
+                    debug_id,
                 })
             }
             Err(e) => {
@@ -805,6 +801,7 @@ impl ArtifactFetcher {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     fn try_get_file_from_bundles(&mut self, key: &FileKey) -> Option<CachedFileEntry> {
         if self.artifact_bundles.is_empty() {
             return None;
@@ -894,6 +891,7 @@ impl ArtifactFetcher {
         None
     }
 
+    #[tracing::instrument(skip(self))]
     async fn try_fetch_file_from_artifacts(&mut self, key: &FileKey) -> Option<CachedFileEntry> {
         if self.individual_artifacts.is_empty() {
             return None;
@@ -931,9 +929,11 @@ impl ArtifactFetcher {
 
                 // Get the sourcemap reference from the artifact, either from metadata, or file contents
                 let sourcemap_url = resolve_sourcemap_url(abs_path, &artifact.headers, &contents);
+                let debug_id = discover_debug_id(&contents);
                 CachedFile {
                     contents: Some(contents),
                     sourcemap_url: sourcemap_url.map(Arc::new),
+                    debug_id,
                 }
             }),
             resolved_with: artifact.resolved_with,
@@ -943,6 +943,7 @@ impl ArtifactFetcher {
     /// Queries the Sentry API for a single file (by its [`DebugId`] and file stem).
     ///
     /// Returns `true` if any new data was made available through this API request.
+    #[tracing::instrument(skip(self))]
     async fn query_sentry_for_file(&mut self, key: &FileKey) -> bool {
         let mut debug_ids = BTreeSet::new();
         let mut file_stems = BTreeSet::new();
@@ -964,6 +965,7 @@ impl ArtifactFetcher {
     /// Individual files are not eagerly downloaded, but their metadata will be available.
     ///
     /// Returns `true` if any new data was made available through this API request.
+    #[tracing::instrument(skip_all)]
     async fn query_sentry_for_files(
         &mut self,
         debug_ids: BTreeSet<DebugId>,
@@ -1048,9 +1050,6 @@ impl ArtifactFetcher {
         resolved_with: ResolvedWith,
     ) -> bool {
         let uri = remote_file.uri();
-        // clippy, you are wrong, as this would result in borrowing errors,
-        // because we are calling a `self` method while borrowing from `self`
-        #[allow(clippy::map_entry)]
         if self.artifact_bundles.contains_key(&uri) {
             return false;
         }

@@ -35,7 +35,11 @@ enum Command {
 
     /// Clean local caches.
     #[command(name = "cleanup")]
-    Cleanup,
+    Cleanup {
+        /// Only simulate the cleanup without deleting any files.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// Command line interface parser.
@@ -131,23 +135,6 @@ pub fn execute() -> Result<()> {
             }
         };
 
-        if let Some(region_tag) = config.metrics.region_tag.clone() {
-            if tags.contains_key(&region_tag) {
-                tracing::warn!(
-                    "tag {} defined both as region tag and as a custom tag",
-                    region_tag
-                );
-            }
-            match std::env::var("SYMBOLICATOR_REGION") {
-                Ok(region) => {
-                    tags.insert(region_tag, region.to_string());
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "region not available");
-                }
-            }
-        };
-
         if let Some(platform_tag) = config.metrics.platform_tag.clone() {
             if tags.contains_key(&platform_tag) {
                 tracing::warn!(
@@ -170,7 +157,9 @@ pub fn execute() -> Result<()> {
 
     match cli.command {
         Command::Run => server::run(config).context("failed to start the server")?,
-        Command::Cleanup => caching::cleanup(config).context("failed to clean up caches")?,
+        Command::Cleanup { dry_run } => {
+            caching::cleanup(config, dry_run).context("failed to clean up caches")?
+        }
     }
 
     Ok(())

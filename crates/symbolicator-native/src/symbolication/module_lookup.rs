@@ -47,6 +47,7 @@ pub fn object_file_status_from_cache_entry<T>(cache_entry: &CacheEntry<T>) -> Ob
         }
         Err(CacheError::Timeout(_)) => ObjectFileStatus::Timeout,
         Err(CacheError::Malformed(_)) => ObjectFileStatus::Malformed,
+        Err(CacheError::Unsupported(_)) => ObjectFileStatus::Unsupported,
         Err(CacheError::InternalError) => ObjectFileStatus::Other,
     }
 }
@@ -72,7 +73,7 @@ pub struct CacheLookupResult<'a> {
     pub relative_addr: Option<u64>,
 }
 
-impl<'a> CacheLookupResult<'a> {
+impl CacheLookupResult<'_> {
     /// The preferred [`AddrMode`] for this lookup.
     ///
     /// For the symbolicated frame, we generally switch to absolute reporting of addresses. This is

@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::sleep;
@@ -109,7 +109,7 @@ fn test_max_unused_for() -> Result<()> {
     sleep(Duration::from_millis(100));
 
     File::create(tempdir.path().join("objects/keepthis2"))?.write_all(b"hi")?;
-    cache.cleanup()?;
+    cache.cleanup(false)?;
 
     let mut basenames: Vec<_> = fs::read_dir(tempdir.path().join("objects"))?
         .map(|x| x.unwrap().file_name().into_string().unwrap())
@@ -147,7 +147,7 @@ fn test_retry_misses_after() -> Result<()> {
     sleep(Duration::from_millis(100));
 
     File::create(tempdir.path().join("objects/keepthis2"))?.write_all(b"")?;
-    cache.cleanup()?;
+    cache.cleanup(false)?;
 
     let mut basenames: Vec<_> = fs::read_dir(tempdir.path().join("objects"))?
         .map(|x| x.unwrap().file_name().into_string().unwrap())
@@ -192,7 +192,7 @@ fn test_cleanup_malformed() -> Result<()> {
         1024,
     )?;
 
-    cache.cleanup()?;
+    cache.cleanup(false)?;
 
     let mut basenames: Vec<_> = fs::read_dir(tempdir.path().join("objects"))?
         .map(|x| x.unwrap().file_name().into_string().unwrap())
@@ -236,7 +236,7 @@ fn test_cleanup_cache_download() -> Result<()> {
 
     sleep(Duration::from_millis(30));
 
-    cache.cleanup()?;
+    cache.cleanup(false)?;
 
     let mut basenames: Vec<_> = fs::read_dir(tempdir.path().join("objects"))?
         .map(|x| x.unwrap().file_name().into_string().unwrap())
@@ -444,7 +444,7 @@ fn test_cleanup() {
     assert!(cficaches_entry.is_file());
     assert!(diagnostics_entry.is_file());
 
-    caches.cleanup().unwrap();
+    caches.cleanup(false).unwrap();
 
     assert!(!object_entry.is_file());
     assert!(!object_meta_entry.is_file());
@@ -754,8 +754,8 @@ impl CacheItemRequest for TestCacheItem {
     type Item = String;
 
     const VERSIONS: CacheVersions = CacheVersions {
-        current: 1,
-        fallbacks: &[0],
+        current: 2,
+        fallbacks: &[1],
     };
 
     fn compute<'a>(&'a self, temp_file: &'a mut NamedTempFile) -> BoxFuture<'a, CacheEntry> {
@@ -784,12 +784,13 @@ async fn test_cache_fallback() {
     let request = TestCacheItem::new();
     let key = CacheKey::for_testing("global/some_cache_key");
 
-    {
-        let cache_dir = cache_dir.path().join("objects");
-        let cache_file = cache_dir.join(key.cache_path(0));
-        fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
-        fs::write(cache_file, "some old cached contents").unwrap();
-    }
+    let very_old_cache_file = cache_dir.path().join("objects").join(key.cache_path(0));
+    fs::create_dir_all(very_old_cache_file.parent().unwrap()).unwrap();
+    fs::write(&very_old_cache_file, "some incompatible cached contents").unwrap();
+
+    let old_cache_file = cache_dir.path().join("objects").join(key.cache_path(1));
+    fs::create_dir_all(old_cache_file.parent().unwrap()).unwrap();
+    fs::write(&old_cache_file, "some old cached contents").unwrap();
 
     let config = Config {
         cache_dir: Some(cache_dir.path().to_path_buf()),
@@ -818,6 +819,10 @@ async fn test_cache_fallback() {
 
     // we only want to have the actual computation be done a single time
     assert_eq!(request.computations.load(Ordering::SeqCst), 1);
+
+    // the old cache files should have been removed during the recomputation
+    assert!(!fs::exists(very_old_cache_file).unwrap());
+    assert!(!fs::exists(old_cache_file).unwrap());
 }
 
 /// Makes sure that a `NotFound` result does not fall back to older cache versions.
@@ -831,11 +836,11 @@ async fn test_cache_fallback_notfound() {
 
     {
         let cache_dir = cache_dir.path().join("objects");
-        let cache_file = cache_dir.join(key.cache_path(0));
+        let cache_file = cache_dir.join(key.cache_path(1));
         fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
         fs::write(cache_file, "some old cached contents").unwrap();
 
-        let cache_file = cache_dir.join(key.cache_path(1));
+        let cache_file = cache_dir.join(key.cache_path(2));
         fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
         fs::write(cache_file, "").unwrap();
     }
@@ -888,7 +893,7 @@ async fn test_lazy_computation_limit() {
         let request = request.clone();
         let key = CacheKey::for_testing(*key);
 
-        let cache_file = cache_dir.join(key.cache_path(0));
+        let cache_file = cache_dir.join(key.cache_path(1));
         fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
         fs::write(cache_file, "some old cached contents").unwrap();
 
@@ -916,4 +921,80 @@ async fn test_lazy_computation_limit() {
     }
 
     assert_eq!(num_outdated, 2);
+}
+
+/// A request to compute a cache item that always fails.
+#[derive(Clone)]
+struct FailingTestCacheItem(CacheError);
+
+impl CacheItemRequest for FailingTestCacheItem {
+    type Item = String;
+
+    const VERSIONS: CacheVersions = CacheVersions {
+        current: 1,
+        fallbacks: &[],
+    };
+
+    fn compute<'a>(&'a self, temp_file: &'a mut NamedTempFile) -> BoxFuture<'a, CacheEntry> {
+        Box::pin(async move {
+            fs::write(temp_file.path(), "garbage data")?;
+            Err(self.0.clone())
+        })
+    }
+
+    fn load(&self, data: ByteView<'static>) -> CacheEntry<Self::Item> {
+        Ok(std::str::from_utf8(data.as_slice()).unwrap().to_owned())
+    }
+}
+
+/// Verifies that an internal error during computation results in the temporary
+/// file being discarded instead of persisted.
+#[tokio::test]
+async fn test_failing_cache_write() {
+    test::setup();
+    let cache_dir = test::tempdir();
+
+    let config = Config {
+        cache_dir: Some(cache_dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let cache = Cache::from_config(
+        CacheName::Objects,
+        &config,
+        CacheConfig::from(CacheConfigs::default().derived),
+        Arc::new(AtomicIsize::new(1)),
+        1024,
+    )
+    .unwrap();
+    let cacher = Cacher::new(cache, Default::default());
+
+    // Case 1: internal error
+    let request = FailingTestCacheItem(CacheError::InternalError);
+    let key = CacheKey::for_testing("global/internal_error");
+
+    let entry = cacher
+        .compute_memoized(request, key.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(entry, CacheError::InternalError);
+
+    // The computation returned `InternalError`, so the file should not have been
+    // persisted
+    let cache_file_path = cache_dir.path().join("objects").join(key.cache_path(1));
+    assert!(!fs::exists(cache_file_path).unwrap());
+
+    // Case 2: malformed error
+    let request = FailingTestCacheItem(CacheError::Malformed("this is garbage".to_owned()));
+    let key = CacheKey::for_testing("global/malformed");
+
+    let entry = cacher
+        .compute_memoized(request, key.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(entry, CacheError::Malformed("this is garbage".to_owned()));
+
+    // The computation returned `Malformed`, so the file should have been
+    // persisted
+    let cache_file_path = cache_dir.path().join("objects").join(key.cache_path(1));
+    assert!(fs::exists(cache_file_path).unwrap());
 }

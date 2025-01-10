@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use symbolicator_js::interface::{JsStacktrace, SymbolicateJsStacktraces};
+use symbolicator_js::interface::{JsModule, JsStacktrace, SymbolicateJsStacktraces};
 use symbolicator_js::SourceMapService;
 use symbolicator_native::interface::{RawStacktrace, StacktraceOrigin, SymbolicateStacktraces};
 use symbolicator_native::SymbolicationActor;
@@ -41,7 +41,7 @@ struct EventFile {
 #[derive(Debug, Deserialize)]
 struct JsEventFile {
     stacktraces: Vec<JsStacktrace>,
-    modules: Vec<RawObjectInfo>,
+    modules: Vec<JsModule>,
 }
 
 #[derive(Clone)]
@@ -77,6 +77,7 @@ pub fn prepare_payload(
             let modules = modules.into_iter().map(From::from).collect();
 
             ParsedPayload::Event(SymbolicateStacktraces {
+                platform: None,
                 scope,
                 signal: None,
                 sources,
@@ -114,6 +115,7 @@ pub fn prepare_payload(
             ParsedPayload::Js(
                 srv,
                 SymbolicateJsStacktraces {
+                    platform: None,
                     scope,
                     source: Arc::new(source),
                     release: Some("some-release".into()),
@@ -163,6 +165,7 @@ pub async fn process_payload(
             symbolication
                 .0
                 .process_minidump(
+                    None,
                     scope.clone(),
                     temp_path,
                     Arc::clone(sources),

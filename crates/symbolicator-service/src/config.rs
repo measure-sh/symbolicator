@@ -96,11 +96,6 @@ pub struct Metrics {
     /// If this is set, the platform will be read from the `SYMBOLICATOR_PLATFORM`
     /// environment variable.
     pub platform_tag: Option<String>,
-    /// A tag name to report the region to, for each metric. Defaults to not sending such a tag.
-    ///
-    /// If this is set, the platform will be read from the `SYMBOLICATOR_REGION` environment
-    /// variable.
-    pub region_tag: Option<String>,
     /// A map containing custom tags and their values.
     ///
     /// These tags will be appended to every metric.
@@ -118,7 +113,6 @@ impl Default for Metrics {
             hostname_tag: None,
             environment_tag: None,
             platform_tag: None,
-            region_tag: None,
             custom_tags: BTreeMap::new(),
         }
     }
@@ -610,7 +604,7 @@ impl Config {
 #[derive(Debug)]
 struct LevelFilterVisitor;
 
-impl<'de> de::Visitor<'de> for LevelFilterVisitor {
+impl de::Visitor<'_> for LevelFilterVisitor {
     type Value = LevelFilter;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> std::fmt::Result {

@@ -1,5 +1,5 @@
 use std::io::{Read, Seek};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fmt, io};
 
@@ -10,6 +10,7 @@ use remote::EventKey;
 use settings::Mode;
 use symbolicator_js::SourceMapService;
 use symbolicator_native::SymbolicationActor;
+use symbolicator_service::config::Config;
 use symbolicator_service::services::SharedServices;
 use symbolicator_service::types::Scope;
 use symbolicator_sources::{
@@ -100,7 +101,7 @@ async fn main() -> Result<()> {
     };
 
     let res = match payload {
-        Payload::Event(event) if event.is_js() => {
+        Payload::Event(event) if event.platform.is_js() => {
             let Mode::Online {
                 ref org,
                 ref project,
@@ -128,62 +129,28 @@ async fn main() -> Result<()> {
             CompletedResponse::JsSymbolication(js.symbolicate_js(request).await)
         }
 
-        _ => {
-            let mut dsym_sources = vec![];
-            if let Mode::Online {
-                ref org,
-                ref project,
-                ref base_url,
-                ref auth_token,
-                ..
-            } = mode
-            {
-                let project_source = SourceConfig::Sentry(Arc::new(SentrySourceConfig {
-                    id: SourceId::new("sentry:project"),
-                    token: auth_token.clone(),
-                    url: base_url
-                        .join(&format!("projects/{org}/{project}/files/dsyms/"))
-                        .unwrap(),
-                }));
+        Payload::Event(event) if event.platform.is_native() => {
+            let dsym_sources = prepare_dsym_sources(mode, &symbolicator_config, symbols);
+            let request = create_native_symbolication_request(scope, dsym_sources, event)
+                .context("Event cannot be symbolicated")?;
 
-                dsym_sources.push(project_source);
-            }
+            tracing::info!("symbolicating event");
 
-            dsym_sources.extend(symbolicator_config.sources.iter().cloned());
-            if let Some(path) = symbols {
-                let local_source = FilesystemSourceConfig {
-                    id: SourceId::new("local:cli"),
-                    path,
-                    files: CommonSourceConfig {
-                        filters: Default::default(),
-                        layout: DirectoryLayout {
-                            ty: DirectoryLayoutType::Unified,
-                            casing: Default::default(),
-                        },
-                        is_public: false,
-                    },
-                };
-                dsym_sources.push(SourceConfig::Filesystem(local_source.into()));
-            }
-            let dsym_sources = Arc::from(dsym_sources.into_boxed_slice());
-
-            CompletedResponse::NativeSymbolication(match payload {
-                Payload::Event(event) => {
-                    let request = create_native_symbolication_request(scope, dsym_sources, event)
-                        .context("Event cannot be symbolicated")?;
-
-                    tracing::info!("symbolicating event");
-
-                    native.symbolicate(request).await?
-                }
-                Payload::Minidump(minidump_path) => {
-                    tracing::info!("symbolicating minidump");
-                    native
-                        .process_minidump(scope, minidump_path, dsym_sources, Default::default())
-                        .await?
-                }
-            })
+            let res = native.symbolicate(request).await?;
+            CompletedResponse::NativeSymbolication(res)
         }
+        Payload::Minidump(minidump_path) => {
+            let dsym_sources = prepare_dsym_sources(mode, &symbolicator_config, symbols);
+            tracing::info!("symbolicating minidump");
+            let res = native
+                .process_minidump(None, scope, minidump_path, dsym_sources, Default::default())
+                .await?;
+            CompletedResponse::NativeSymbolication(res)
+        }
+        Payload::Event(event) => anyhow::bail!(
+            "Cannot symbolicate event: invalid platform {}",
+            event.platform
+        ),
     };
 
     match output_format {
@@ -200,6 +167,50 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn prepare_dsym_sources(
+    mode: Mode,
+    symbolicator_config: &Config,
+    local_symbols: Option<PathBuf>,
+) -> Arc<[SourceConfig]> {
+    let mut dsym_sources = vec![];
+    if let Mode::Online {
+        ref org,
+        ref project,
+        ref base_url,
+        ref auth_token,
+        ..
+    } = mode
+    {
+        let project_source = SourceConfig::Sentry(Arc::new(SentrySourceConfig {
+            id: SourceId::new("sentry:project"),
+            token: auth_token.clone(),
+            url: base_url
+                .join(&format!("projects/{org}/{project}/files/dsyms/"))
+                .unwrap(),
+        }));
+
+        dsym_sources.push(project_source);
+    }
+
+    dsym_sources.extend(symbolicator_config.sources.iter().cloned());
+    if let Some(path) = local_symbols {
+        let local_source = FilesystemSourceConfig {
+            id: SourceId::new("local:cli"),
+            path,
+            files: CommonSourceConfig {
+                filters: Default::default(),
+                layout: DirectoryLayout {
+                    ty: DirectoryLayoutType::Unified,
+                    casing: Default::default(),
+                },
+                is_public: false,
+            },
+        };
+        dsym_sources.push(SourceConfig::Filesystem(local_source.into()));
+    }
+    Arc::from(dsym_sources.into_boxed_slice())
 }
 
 #[derive(Debug)]
@@ -408,13 +419,13 @@ mod event {
     use serde::Deserialize;
     use symbolic::common::Language;
     use symbolicator_js::interface::{
-        JsFrame, JsFrameData, JsStacktrace, SymbolicateJsStacktraces,
+        JsFrame, JsFrameData, JsModule, JsStacktrace, SymbolicateJsStacktraces,
     };
     use symbolicator_native::interface::{
         AddrMode, CompleteObjectInfo, FrameTrust, RawFrame, RawStacktrace, Signal,
         StacktraceOrigin, SymbolicateStacktraces,
     };
-    use symbolicator_service::types::{RawObjectInfo, Scope, ScrapingConfig};
+    use symbolicator_service::types::{Platform, RawObjectInfo, Scope, ScrapingConfig};
     use symbolicator_service::utils::hex::HexValue;
     use symbolicator_sources::{SentrySourceConfig, SourceConfig};
 
@@ -425,6 +436,7 @@ mod event {
         scraping_enabled: bool,
     ) -> anyhow::Result<SymbolicateJsStacktraces> {
         let Event {
+            platform,
             debug_meta,
             exception,
             threads,
@@ -455,13 +467,21 @@ mod event {
             .filter(|stacktrace| !stacktrace.frames.is_empty())
             .collect();
 
-        let modules: Vec<_> = debug_meta.images.into_iter().collect();
+        let modules: Vec<_> = debug_meta
+            .images
+            .into_iter()
+            .filter_map(|module| match module {
+                Module::Sourcemap(m) => Some(m),
+                _ => None,
+            })
+            .collect();
 
         if stacktraces.is_empty() {
             bail!("Event has no usable frames");
         };
 
         Ok(SymbolicateJsStacktraces {
+            platform: Some(platform),
             scope,
             source,
             release,
@@ -515,7 +535,10 @@ mod event {
         let modules: Vec<_> = debug_meta
             .images
             .into_iter()
-            .map(CompleteObjectInfo::from)
+            .filter_map(|module| match module {
+                Module::Object(m) => Some(CompleteObjectInfo::from(m)),
+                _ => None,
+            })
             .collect();
 
         if modules.is_empty() {
@@ -527,6 +550,7 @@ mod event {
         };
 
         Ok(SymbolicateStacktraces {
+            platform: Some(event.platform),
             scope,
             signal,
             sources,
@@ -538,20 +562,10 @@ mod event {
         })
     }
 
-    #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
-    #[serde(rename_all = "snake_case")]
-    enum Platform {
-        #[default]
-        Native,
-        Javascript,
-        Node,
-        Csharp,
-    }
-
     #[derive(Debug, Deserialize)]
     pub struct Event {
         #[serde(default)]
-        platform: Platform,
+        pub platform: Platform,
         #[serde(default)]
         debug_meta: DebugMeta,
         exception: Option<Exceptions>,
@@ -561,15 +575,16 @@ mod event {
         dist: Option<String>,
     }
 
-    impl Event {
-        pub fn is_js(&self) -> bool {
-            matches!(self.platform, Platform::Javascript | Platform::Node)
-        }
-    }
-
     #[derive(Debug, Deserialize, Default)]
     struct DebugMeta {
-        images: Vec<RawObjectInfo>,
+        images: Vec<Module>,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(untagged)]
+    pub enum Module {
+        Object(RawObjectInfo),
+        Sourcemap(JsModule),
     }
 
     #[derive(Debug, Deserialize)]
@@ -633,6 +648,7 @@ mod event {
 
     #[derive(Debug, Deserialize)]
     struct Frame {
+        platform: Option<Platform>,
         #[serde(default)]
         addr_mode: AddrMode,
 
@@ -683,6 +699,7 @@ mod event {
 
     fn to_raw_frame(value: Frame) -> Option<RawFrame> {
         Some(RawFrame {
+            platform: value.platform,
             addr_mode: value.addr_mode,
             instruction_addr: value.instruction_addr?,
             adjust_instruction_addr: None,
@@ -706,6 +723,7 @@ mod event {
 
     fn to_js_frame(value: Frame) -> Option<JsFrame> {
         Some(JsFrame {
+            platform: value.platform,
             function: value.function,
             filename: value.filename,
             module: value.module,

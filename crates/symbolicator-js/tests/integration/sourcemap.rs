@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use reqwest::Url;
 use serde_json::json;
-use symbolicator_js::interface::{JsFrame, JsStacktrace, SymbolicateJsStacktraces};
-use symbolicator_service::types::{RawObjectInfo, Scope, ScrapingConfig};
+use symbolicator_js::interface::{JsFrame, JsModule, JsStacktrace, SymbolicateJsStacktraces};
+use symbolicator_service::types::{Scope, ScrapingConfig};
 use symbolicator_sources::{SentrySourceConfig, SourceId};
 
 use crate::{assert_snapshot, setup_service};
@@ -32,10 +32,11 @@ fn make_js_request(
     dist: impl Into<Option<String>>,
 ) -> SymbolicateJsStacktraces {
     let frames: Vec<JsFrame> = serde_json::from_str(frames).unwrap();
-    let modules: Vec<RawObjectInfo> = serde_json::from_str(modules).unwrap();
+    let modules: Vec<JsModule> = serde_json::from_str(modules).unwrap();
     let stacktraces = vec![JsStacktrace { frames }];
 
     SymbolicateJsStacktraces {
+        platform: None,
         scope: Scope::Global,
         source: Arc::new(source),
         release: release.into(),
@@ -652,6 +653,37 @@ async fn e2e_react_native() {
 async fn e2e_multiple_smref_scraped() {
     let (symbolication, _cache_dir) = setup_service(|_| ());
     let (srv, source) = sourcemap_server("e2e_multiple_smref_scraped", |_url, _query| json!([]));
+
+    let url = srv.url("/files/");
+    let frames = format!(
+        r#"[{{
+        "abs_path": "{url}app.js",
+        "lineno": 1,
+        "colno": 64
+    }}]"#
+    );
+    let modules = r#"[]"#;
+
+    let mut request = make_js_request(source, &frames, modules, None, None);
+    request.scraping.enabled = true;
+
+    let response = symbolication.symbolicate_js(request).await;
+
+    assert_snapshot!(response);
+}
+
+#[tokio::test]
+async fn e2e_scraped_debugid() {
+    let (symbolication, _cache_dir) = setup_service(|_| ());
+    let (srv, source) = sourcemap_server("e2e_scraped_debugid", |url, query| {
+        assert_eq!(query, "debug_id=2f259f80-58b7-44cb-d7cd-de1505e7e718");
+        json!([{
+            "type": "bundle",
+            "id": "1",
+            "url": format!("{url}/bundle.zip"),
+            "resolved_with": "debug-id",
+        }])
+    });
 
     let url = srv.url("/files/");
     let frames = format!(

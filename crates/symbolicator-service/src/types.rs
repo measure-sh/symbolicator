@@ -147,6 +147,12 @@ pub enum ObjectFileStatus {
     FetchingFailed,
     /// Downloading or processing the file took too long.
     Timeout,
+    /// The file could not be used for the purpose for which it was requested.
+    ///
+    /// This is currently only used when we try to symbolicate a .NET event with a Windows
+    /// PDB file. A tracking issue in `symbolic` for supporting this case is
+    /// [here](https://github.com/getsentry/symbolic/issues/871).
+    Unsupported,
     /// An internal error while handling this image.
     Other,
 }
@@ -161,7 +167,148 @@ impl ObjectFileStatus {
             ObjectFileStatus::Malformed => "malformed",
             ObjectFileStatus::FetchingFailed => "fetching_failed",
             ObjectFileStatus::Timeout => "timeout",
+            ObjectFileStatus::Unsupported => "unsupported",
             ObjectFileStatus::Other => "other",
         }
+    }
+}
+
+/// Possible values for the platform of a native event.
+///
+/// This corresponds to `NATIVE_PLATFORMS` in Sentry.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum NativePlatform {
+    ObjC,
+    Cocoa,
+    Swift,
+    Native,
+    C,
+    CSharp,
+}
+
+impl AsRef<str> for NativePlatform {
+    fn as_ref(&self) -> &str {
+        match self {
+            NativePlatform::ObjC => "objc",
+            NativePlatform::Cocoa => "cocoa",
+            NativePlatform::Swift => "swift",
+            NativePlatform::Native => "native",
+            NativePlatform::C => "c",
+            NativePlatform::CSharp => "csharp",
+        }
+    }
+}
+
+impl fmt::Display for NativePlatform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_ref().fmt(f)
+    }
+}
+
+/// Possible values for the platform of a JavaScript event.
+///
+/// This corresponds to the platforms listed in `is_js_event` in Sentry.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum JsPlatform {
+    // Very rarely we see frames with a platform of `"nodejs"`.
+    // We cover this case with an alias just to be sure.
+    #[serde(alias = "nodejs")]
+    Node,
+    JavaScript,
+}
+
+impl AsRef<str> for JsPlatform {
+    fn as_ref(&self) -> &str {
+        match self {
+            JsPlatform::Node => "node",
+            JsPlatform::JavaScript => "javascript",
+        }
+    }
+}
+
+impl fmt::Display for JsPlatform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_ref().fmt(f)
+    }
+}
+
+/// Possible values for the platform of a JVM event.
+///
+/// This covers `"java"` (used in error events) and `"android"` (used in
+/// profiling).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum JvmPlatform {
+    Java,
+    Android,
+}
+
+impl AsRef<str> for JvmPlatform {
+    fn as_ref(&self) -> &str {
+        match self {
+            JvmPlatform::Java => "java",
+            JvmPlatform::Android => "android",
+        }
+    }
+}
+
+impl fmt::Display for JvmPlatform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_ref().fmt(f)
+    }
+}
+
+/// Possible values for the platform of an event.
+///
+/// In addition to the native, JS, and JVM cases this also has a catch-all variant for
+/// otherwise unrecognized platforms.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(untagged)]
+pub enum Platform {
+    Native(NativePlatform),
+    Js(JsPlatform),
+    Jvm(JvmPlatform),
+    Other(String),
+}
+
+impl Platform {
+    /// Returns `true` if this is a native platform.
+    pub fn is_native(&self) -> bool {
+        matches!(self, Self::Native(_))
+    }
+
+    /// Returns `true` if this is a JS platform.
+    pub fn is_js(&self) -> bool {
+        matches!(self, Self::Js(_))
+    }
+
+    /// Returns `true` if this is a JVM platform.
+    pub fn is_jvm(&self) -> bool {
+        matches!(self, Self::Jvm(_))
+    }
+}
+
+impl Default for Platform {
+    fn default() -> Self {
+        Self::Other("unknown".to_owned())
+    }
+}
+
+impl AsRef<str> for Platform {
+    fn as_ref(&self) -> &str {
+        match self {
+            Platform::Native(p) => p.as_ref(),
+            Platform::Js(p) => p.as_ref(),
+            Platform::Jvm(p) => p.as_ref(),
+            Platform::Other(p) => p.as_ref(),
+        }
+    }
+}
+
+impl fmt::Display for Platform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_ref().fmt(f)
     }
 }

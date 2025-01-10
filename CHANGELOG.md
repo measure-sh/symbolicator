@@ -1,6 +1,56 @@
 # Changelog
 
-## Unreleased
+## 24.12.1
+
+### Various fixes & improvements
+
+- feat: Bump symcache version (#1572) by @jjbayer
+- chore(deps): Bump symbolic to 12.12.4 (#1571) by @jjbayer
+
+## 24.12.0
+
+### Various fixes & improvements
+
+- chore(deps): update Native SDK to v0.7.16 (#1566) by @github-actions
+
+## 24.11.2
+
+### Various fixes & improvements
+
+- All symbolication endpoints (`symbolicate-{,js,jvm}`, `minidump`, `applecrashreport`)
+  now take an additional `platform` parameter. Stack frames gain this parameter
+  as well. ([#1560](https://github.com/getsentry/symbolicator/pull/1560))
+
+### Dependencies
+
+- Bump Native SDK from v0.7.15 to v0.7.16 ([#1566](https://github.com/getsentry/symbolicator/pull/1566))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#0716)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.7.15...0.7.16)
+
+## 24.11.1
+
+### Dependencies
+
+- Bump Native SDK from v0.7.12 to v0.7.15 ([#1555](https://github.com/getsentry/symbolicator/pull/1555))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#0715)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.7.12...0.7.15)
+
+## 24.11.0
+
+### Dependencies
+
+- Bump Native SDK from v0.7.10 to v0.7.12 ([#1546](https://github.com/getsentry/symbolicator/pull/1546), [#1550](https://github.com/getsentry/symbolicator/pull/1550))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#0712)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.7.10...0.7.12)
+
+## 24.10.0
+
+### Various fixes & improvements
+
+- Added `dry-run` mode to the `cleanup` command that simulates the cleanup
+  without deleting files. ([#1531](https://github.com/getsentry/symbolicator/pull/1531))
+- Parse debug identifiers from scraped JavaScript source files
+  ([#1534](https://github.com/getsentry/symbolicator/pull/1534))
 
 ### Dependencies
 

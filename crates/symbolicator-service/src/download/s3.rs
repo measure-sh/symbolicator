@@ -147,8 +147,7 @@ impl S3Downloader {
                         // of these in production and figure out what we actually get here
                         tracing::error!(
                             error = &err as &dyn std::error::Error,
-                            "S3 request timed out: {:?}",
-                            err
+                            "S3 request timed out",
                         );
                         return Err(CacheError::Timeout(Duration::ZERO));
                     }
@@ -182,12 +181,19 @@ impl S3Downloader {
                     _ if matches!(err.code(), Some("NoSuchBucket" | "NoSuchKey" | "NotFound")) => {
                         Err(CacheError::NotFound)
                     }
-                    _ => {
+                    // Log errors, filtering out some uninteresting ones.
+                    //
+                    // * PermanentRedirect is a user error.
+                    _ if !matches!(err.code(), Some("PermanentRedirect")) => {
                         tracing::error!(
                             error = &err as &dyn std::error::Error,
                             "S3 request failed: {:?}",
-                            err
+                            err.code(),
                         );
+                        let details = err.to_string();
+                        Err(CacheError::DownloadError(details))
+                    }
+                    _ => {
                         let details = err.to_string();
                         Err(CacheError::DownloadError(details))
                     }
@@ -196,7 +202,7 @@ impl S3Downloader {
         };
 
         if response.content_length == Some(0) {
-            tracing::debug!("Empty response from s3:{}{}", &bucket, &key);
+            tracing::debug!(bucket, key, "Empty response from s3");
             return Err(CacheError::NotFound);
         }
 

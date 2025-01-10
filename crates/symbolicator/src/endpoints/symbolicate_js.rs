@@ -3,8 +3,8 @@ use std::sync::Arc;
 use axum::extract;
 use axum::response::Json;
 use serde::{Deserialize, Serialize};
-use symbolicator_js::interface::{JsStacktrace, SymbolicateJsStacktraces};
-use symbolicator_service::types::RawObjectInfo;
+use symbolicator_js::interface::{JsModule, JsStacktrace, SymbolicateJsStacktraces};
+use symbolicator_service::types::Platform;
 use symbolicator_sources::SentrySourceConfig;
 
 use crate::endpoints::symbolicate::SymbolicationRequestQueryParams;
@@ -15,11 +15,12 @@ use super::ResponseError;
 
 #[derive(Serialize, Deserialize)]
 pub struct JsSymbolicationRequestBody {
+    pub platform: Option<Platform>,
     pub source: SentrySourceConfig,
     #[serde(default)]
     pub stacktraces: Vec<JsStacktrace>,
     #[serde(default)]
-    pub modules: Vec<RawObjectInfo>,
+    pub modules: Vec<JsModule>,
     #[serde(default)]
     pub release: Option<String>,
     #[serde(default)]
@@ -67,6 +68,7 @@ pub async fn handle_symbolication_request(
     params.configure_scope();
 
     let JsSymbolicationRequestBody {
+        platform,
         source,
         stacktraces,
         modules,
@@ -81,6 +83,7 @@ pub async fn handle_symbolication_request(
     scraping.enabled &= allow_scraping;
 
     let request_id = service.symbolicate_js_stacktraces(SymbolicateJsStacktraces {
+        platform,
         scope: params.scope,
         source: Arc::new(source),
         stacktraces,

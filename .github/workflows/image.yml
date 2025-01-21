@@ -1,6 +1,7 @@
 name: image
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches:
       - master
@@ -11,22 +12,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-setup:
+    name: Setup build metadata
+    runs-on: ubuntu-latest
+
+    env:
+      FULL_CI: "${{
+        github.event_name != 'pull_request'
+        || contains(github.event.pull_request.labels.*.name, 'Trigger: Full-CI')
+      }}"
+
+    steps:
+      - id: set-outputs
+        run: |
+          echo "full_ci=$FULL_CI" >> $GITHUB_OUTPUT
+
+          if [[ "$FULL_CI" == "true" ]]; then
+            echo "Running full CI"
+            echo 'archs=["amd64", "arm64"]' >> $GITHUB_OUTPUT
+          else
+            echo "Skipping some CI steps"
+            echo 'archs=["amd64"]' >> $GITHUB_OUTPUT
+          fi
+    outputs:
+      archs: "${{ steps.set-outputs.outputs.archs }}"
+      full_ci: "${{ steps.set-outputs.outputs.full_ci }}"
+
+
   build-image:
+    needs: build-setup
+
     strategy:
       matrix:
-        arch: [amd64]
-    runs-on: ubuntu-20.04
+        arch: ${{ fromJson(needs.build-setup.outputs.archs) }}
+
+    runs-on: |-
+      ${{fromJson('{
+        "amd64": "ubuntu-20.04",
+        "arm64": "ubuntu-22.04-arm64-relay"
+      }')[matrix.arch] }}
+
     env:
-      # IMG_CACHE: ghcr.io/getsentry/symbolicator:${{ matrix.arch }}-latest
       IMG_VERSIONED: ghcr.io/getsentry/symbolicator:${{ matrix.arch }}-${{ github.sha }}
       NIGHTLY_IMG_CACHE: ghcr.io/getsentry/symbolicator:${{ matrix.arch }}-nightly
       BUILDER_IMG_CACHE: ghcr.io/getsentry/symbolicator:${{ matrix.arch }}-builder
+
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - run: docker run --rm --privileged tonistiigi/binfmt --install arm64
-        if: matrix.arch == 'arm64'
+
+      - name: Docker Login
+        run: docker login --username '${{ github.actor }}' --password '${{ secrets.GITHUB_TOKEN }}' ghcr.io
 
       - name: build builder img
         run: |
@@ -61,14 +98,83 @@ jobs:
               .
 
       - name: push all images
-        if: github.event_name != 'pull_request'
+        if: "needs.build-setup.outputs.full_ci == 'true'"
         run: |
-          set -euxo pipefail
-          docker login --username '${{ github.actor }}' --password '${{ secrets.GITHUB_TOKEN }}' ghcr.io
           docker push "$BUILDER_IMG_CACHE"
           docker push "$NIGHTLY_IMG_CACHE"
           docker push "$IMG_VERSIONED"
 
-          # for now arm64 is too slow so just retag this as latest
-          docker tag "$IMG_VERSIONED" ghcr.io/getsentry/symbolicator:latest
-          docker push ghcr.io/getsentry/symbolicator:latest
+  assemble:
+    needs: [build-setup, build-image]
+    if: "needs.build-setup.outputs.full_ci == 'true'"
+
+    name: Assemble for Github Container Registry
+    runs-on: ubuntu-20.04
+
+    env:
+      TARGET_IMAGE: ghcr.io/getsentry/symbolicator
+
+    steps:
+      - name: Docker Login
+        run: docker login --username '${{ github.actor }}' --password '${{ secrets.GITHUB_TOKEN }}' ghcr.io
+
+      - name: Assemble Sha Image
+        run: |
+          docker buildx imagetools create -t "${TARGET_IMAGE}:${{ github.sha }}" \
+            "${TARGET_IMAGE}:arm64-${{ github.sha }}" \
+            "${TARGET_IMAGE}:amd64-${{ github.sha }}"
+
+      - name: Assemble Latest Image
+        if: github.ref_name == 'master'
+        run: |
+          docker buildx imagetools create -t "${TARGET_IMAGE}:latest" \
+            "${TARGET_IMAGE}:arm64-${{ github.sha }}" \
+            "${TARGET_IMAGE}:amd64-${{ github.sha }}"
+
+  assemble-ar:
+    needs: [build-setup, build-image]
+    if: "needs.build-setup.outputs.full_ci == 'true'"
+
+    name: Assemble for Google Artifact Registry
+    runs-on: ubuntu-latest
+
+    # required for google auth
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      GHCR_IMAGE: ghcr.io/getsentry/symbolicator
+      TARGET_IMAGE: us-central1-docker.pkg.dev/sentryio/symbolicator/image
+
+    steps:
+      - name: Google Auth
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
+          service_account: gha-gcr-push@sac-prod-sa.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          # https://github.com/google-github-actions/auth#authenticating-via-workload-identity-federation
+          # You must use the Cloud SDK version 390.0.0 or later to authenticate the bq and gsutil tools.
+          version: ">= 390.0.0"
+
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev
+
+      - name: Assemble Sha Image
+        run: |
+          docker buildx imagetools create -t "${TARGET_IMAGE}:${{ github.sha }}" \
+            "${GHCR_IMAGE}:arm64-${{ github.sha }}" \
+            "${GHCR_IMAGE}:amd64-${{ github.sha }}"
+
+      - name: Assemble Latest Image
+        if: github.ref_name == 'master'
+        run: |
+          docker buildx imagetools create -t "${TARGET_IMAGE}:latest" \
+            "${GHCR_IMAGE}:arm64-${{ github.sha }}" \
+            "${GHCR_IMAGE}:amd64-${{ github.sha }}"

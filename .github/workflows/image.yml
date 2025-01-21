@@ -1,6 +1,7 @@
 name: image
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches:
       - measure
@@ -11,13 +12,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # build-setup:
+  #   name: Setup build metadata
+  #   runs-on: ubuntu-latest
+
+  #   env:
+  #     FULL_CI: "${{
+  #       github.event_name != 'pull_request'
+  #       || contains(github.event.pull_request.labels.*.name, 'Trigger: Full-CI')
+  #     }}"
+
+  #   steps:
+  #     - id: set-outputs
+  #       run: |
+  #         echo "full_ci=$FULL_CI" >> $GITHUB_OUTPUT
+
+  #         if [[ "$FULL_CI" == "true" ]]; then
+  #           echo "Running full CI"
+  #           echo 'archs=["amd64", "arm64"]' >> $GITHUB_OUTPUT
+  #         else
+  #           echo "Skipping some CI steps"
+  #           echo 'archs=["amd64"]' >> $GITHUB_OUTPUT
+  #         fi
+  #   outputs:
+  #     archs: "${{ steps.set-outputs.outputs.archs }}"
+  #     full_ci: "${{ steps.set-outputs.outputs.full_ci }}"
+
+
   build-image:
     permissions:
       packages: write
     strategy:
       matrix:
-        arch: [amd64]
-    runs-on: ubuntu-20.04
+        # arch: ${{ fromJson(needs.build-setup.outputs.archs) }}
+        arch: ["amd64", "arm64"]
+
+    runs-on: |-
+      ${{fromJson('{
+        "amd64": "ubuntu-20.04",
+        "arm64": "ubuntu-22.04-arm64-relay"
+      }')[matrix.arch] }}
+
     env:
       # IMG_CACHE: ghcr.io/measure-sh/symbolicator:${{ matrix.arch }}-latest
       IMG_VERSIONED: ghcr.io/measure-sh/symbolicator:${{ matrix.arch }}-${{ github.sha }}
@@ -27,8 +62,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - run: docker run --rm --privileged tonistiigi/binfmt --install arm64
-        if: matrix.arch == 'arm64'
+
+      - name: Docker Login
+        run: docker login --username '${{ github.actor }}' --password '${{ secrets.GITHUB_TOKEN }}' ghcr.io
 
       - name: build builder img
         run: |
@@ -63,10 +99,9 @@ jobs:
               .
 
       - name: push all images
+        # if: "needs.build-setup.outputs.full_ci == 'true'"
         if: github.event_name != 'pull_request'
         run: |
-          set -euxo pipefail
-          docker login --username '${{ github.actor }}' --password '${{ secrets.GITHUB_TOKEN }}' ghcr.io
           docker push "$BUILDER_IMG_CACHE"
           docker push "$NIGHTLY_IMG_CACHE"
           docker push "$IMG_VERSIONED"

@@ -19,8 +19,7 @@ jobs:
 
     env:
       IMG_VERSIONED: ghcr.io/measure-sh/symbolicator:${{ github.sha }}
-      NIGHTLY_IMG_CACHE: ghcr.io/measure-sh/symbolicator:nightly
-      BUILDER_IMG_CACHE: ghcr.io/measure-sh/symbolicator:builder
+      LATEST: ghcr.io/measure-sh/symbolicator:latest
 
     steps:
       - uses: actions/checkout@v4
@@ -36,18 +35,10 @@ jobs:
       - name: Build and push OCI multi-platform image
         run: |
           set -euxo pipefail
-          args=()
-          if docker pull -q "$BUILDER_IMG_CACHE"; then
-            args+=(--cache-from "$BUILDER_IMG_CACHE")
-          fi
-          if docker pull -q "$NIGHTLY_IMG_CACHE"; then
-            args+=(--cache-from "$NIGHTLY_IMG_CACHE")
-          fi
           docker buildx build \
-            "${args[@]}" \
             --build-arg BUILD_KIT_INLINE_CACHE=1 \
             --platform linux/amd64,linux/arm64 \
-            --tag "$NIGHTLY_IMG_CACHE" \
+            --tag "$LATEST" \
             --tag "$IMG_VERSIONED" \
             --push .
 

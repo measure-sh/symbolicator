@@ -54,6 +54,5 @@ jobs:
       - name: Retag as latest and push
         if: github.event_name != 'pull_request'
         run: |
-          docker pull "$IMG_VERSIONED"
-          docker tag "$IMG_VERSIONED" ghcr.io/measure-sh/symbolicator:latest
-          docker push ghcr.io/measure-sh/symbolicator:latest
+          docker buildx imagetools create ghcr.io/measure-sh/symbolicator:${{ github.sha }} \
+          -t ghcr.io/measure-sh/symbolicator:latest
